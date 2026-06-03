@@ -1,0 +1,139 @@
+# Kubernetes Alerting Rules
+# Production-grade alert rules for Kubernetes cluster monitoring
+
+groups:
+  # ============================================================
+  # NODE HEALTH ALERTS
+  # ============================================================
+  - name: node-health
+    interval: 30s
+    rules:
+      # Alert when a node is down
+      - alert: NodeDown
+        expr: up{job="kubernetes-nodes"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: sre
+          runbook: https://runbooks.internal/node-down
+        annotations:
+          summary: "Node {{ $labels.instance }} is down"
+          description: "Node {{ $labels.instance }} has been unreachable for more than 5 minutes."
+          action: "Check node status with: kubectl get nodes"
+
+      # Alert when node CPU is high
+      - alert: NodeHighCPU
+        expr: 100 - (avg by(instance)(irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | printf "%.1f" }}% on {{ $labels.instance }}"
+
+      # Alert when node memory is critically low
+      - alert: NodeCriticalMemory
+        expr: (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Critical memory on {{ $labels.instance }}"
+          description: "Only {{ $value | printf "%.1f" }}% memory available on {{ $labels.instance }}"
+
+      # Alert when disk is almost full
+      - alert: NodeDiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Only {{ $value | printf "%.1f" }}% disk space remaining on {{ $labels.instance }}:/"
+
+  # ============================================================
+  # POD/DEPLOYMENT ALERTS
+  # ============================================================
+  - name: kubernetes-workloads
+    interval: 30s
+    rules:
+      # Alert when pods are crash-looping
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is restarting {{ $value | printf "%.2f" }} times per minute"
+
+      # Alert when deployment has no available replicas
+      - alert: DeploymentUnavailable
+        expr: kube_deployment_status_replicas_available == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has 0 replicas"
+          description: "Deployment {{ $labels.deployment }} in {{ $labels.namespace }} has no available replicas for 5+ minutes"
+
+      # Alert when HPA cannot scale
+      - alert: HPAScalingLimited
+        expr: kube_horizontalpodautoscaler_status_current_replicas >= kube_horizontalpodautoscaler_spec_max_replicas
+        for: 15m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "HPA {{ $labels.namespace }}/{{ $labels.horizontalpodautoscaler }} at max replicas"
+          description: "HPA {{ $labels.horizontalpodautoscaler }} has been at max replicas for 15+ minutes. Consider increasing maxReplicas."
+
+  # ============================================================
+  # APPLICATION SLO ALERTS
+  # ============================================================
+  - name: application-slos
+    interval: 30s
+    rules:
+      # Alert when error rate exceeds SLO (99.9% success rate)
+      - alert: HighErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.001
+        for: 5m
+        labels:
+          severity: critical
+          team: sre
+          slo: http-availability
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | printf "%.3f" }} (SLO: < 0.001)"
+
+      # Alert when P99 latency is too high
+      - alert: HighLatencyP99
+        expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+          slo: http-latency
+        annotations:
+          summary: "High P99 latency for {{ $labels.service }}"
+          description: "P99 latency is {{ $value | printf "%.2f" }}s (SLO: < 1.0s) for service {{ $labels.service }}"
+
+  # ============================================================
+  # ALERTMANAGER HEALTH
+  # ============================================================
+  - name: alertmanager-health
+    rules:
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Alertmanager is down"
+          description: "Alertmanager has been down for 5+ minutes. Alerts may not be routed."
