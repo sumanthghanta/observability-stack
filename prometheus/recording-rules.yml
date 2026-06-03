@@ -1,0 +1,109 @@
+# Prometheus Recording Rules
+# Pre-computed metrics for faster dashboard queries and alerting
+
+groups:
+  - name: kubernetes_node_recording_rules
+    interval: 30s
+    rules:
+      # CPU usage rate per node (pre-computed for dashboards)
+      - record: node:cpu_usage:rate5m
+        expr: |
+          1 - avg by(node) (
+            rate(node_cpu_seconds_total{mode="idle"}[5m])
+          )
+
+      # Memory usage percentage per node
+      - record: node:memory_usage:percentage
+        expr: |
+          1 - (
+            node_memory_MemAvailable_bytes /
+            node_memory_MemTotal_bytes
+          )
+
+      # Disk usage percentage per node
+      - record: node:disk_usage:percentage
+        expr: |
+          1 - (
+            node_filesystem_avail_bytes{fstype!="tmpfs"} /
+            node_filesystem_size_bytes{fstype!="tmpfs"}
+          )
+
+  - name: kubernetes_pod_recording_rules
+    interval: 30s
+    rules:
+      # Pod CPU usage rate (pre-computed)
+      - record: pod:cpu_usage:rate5m
+        expr: |
+          sum by(namespace, pod) (
+            rate(container_cpu_usage_seconds_total{container!=""}[5m])
+          )
+
+      # Pod memory usage (pre-computed)
+      - record: pod:memory_usage:bytes
+        expr: |
+          sum by(namespace, pod) (
+            container_memory_working_set_bytes{container!=""}
+          )
+
+      # Pod restart rate (pre-computed)
+      - record: pod:restart_count:rate5m
+        expr: |
+          rate(kube_pod_container_status_restarts_total[5m])
+
+  - name: kubernetes_service_recording_rules
+    interval: 60s
+    rules:
+      # HTTP request rate per service
+      - record: service:http_requests:rate5m
+        expr: |
+          sum by(namespace, service) (
+            rate(http_requests_total[5m])
+          )
+
+      # HTTP error rate per service
+      - record: service:http_errors:rate5m
+        expr: |
+          sum by(namespace, service) (
+            rate(http_requests_total{status=~"5.."}[5m])
+          )
+
+      # HTTP error ratio per service
+      - record: service:http_error_ratio:rate5m
+        expr: |
+          service:http_errors:rate5m /
+          service:http_requests:rate5m
+
+      # P99 latency per service
+      - record: service:http_latency_p99:rate5m
+        expr: |
+          histogram_quantile(0.99,
+            sum by(namespace, service, le) (
+              rate(http_request_duration_seconds_bucket[5m])
+            )
+          )
+
+  - name: kubernetes_cluster_recording_rules
+    interval: 120s
+    rules:
+      # Cluster-wide CPU utilization
+      - record: cluster:cpu_usage:rate5m
+        expr: |
+          sum(node:cpu_usage:rate5m)
+
+      # Cluster-wide memory utilization
+      - record: cluster:memory_usage:percentage
+        expr: |
+          1 - (
+            sum(node_memory_MemAvailable_bytes) /
+            sum(node_memory_MemTotal_bytes)
+          )
+
+      # Total running pods in cluster
+      - record: cluster:pods_running:count
+        expr: |
+          count(kube_pod_status_phase{phase="Running"})
+
+      # Total pending pods in cluster
+      - record: cluster:pods_pending:count
+        expr: |
+          count(kube_pod_status_phase{phase="Pending"})
